@@ -22,7 +22,58 @@ def create_expense(path="expenses/01_2016.csv", date="00-00", title="NA", ttype=
         raise Exception("File does not exist")
 
 def print_help(arg):
-        print(f"Usage: {arg} -y YEAR -m MONTH")
+        print(f'''Usage: {arg} OPTIONS -y YEAR -m MONTH
+              Options:
+              -i              Interactive mode to add expenses
+              -v VIEW_OPTION   View expenses
+                VIEW_OPTION:
+                1: View expenses by month
+                2: View expenses by year
+                3: View expenses by type
+              -y YEAR     Specify the year (e.g., 2026)
+              -m MONTH    Specify the month (1-12)''')
+
+def view_expenses_by_month(year, month):
+    path = f"expenses/{month}_{year}.csv"
+    try:
+        with open(path, "r") as fp:
+            spamreader = csv.reader(fp, delimiter=',')
+            total_expenses = 0
+            for row in spamreader:
+                print(', '.join(row))
+                if row[5] != "Amount":
+                    total_expenses += float(row[5])
+            print("Total Expenses: ", total_expenses)
+    except:
+        raise Exception("File does not exist")
+
+def view_expenses_by_year(year):
+    total_expenses = 0
+    for month in range(1, 13):
+        path = f"expenses/{month}_{year}.csv"
+        try:
+            with open(path, "r") as fp:
+                spamreader = csv.reader(fp, delimiter=',')
+                for row in spamreader:
+                    if row[5] != "Amount":
+                        total_expenses += float(row[5])
+        except:
+            continue
+    print("Total Expenses for year ", year, ": ", total_expenses)
+
+def view_expenses_by_type(year, ttype):
+    total_expenses = 0
+    for month in range(1, 13):
+        path = f"expenses/{month}_{year}.csv"
+        try:
+            with open(path, "r") as fp:
+                spamreader = csv.reader(fp, delimiter=',')
+                for row in spamreader:
+                    if row[2] == ttype and row[5] != "Amount":
+                        total_expenses += float(row[5])
+        except:
+            continue
+    print(f"Total Expenses for type {ttype} in year {year}: ", total_expenses)
 
 def interactive_program(month, year):
     months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
@@ -76,7 +127,32 @@ def main():
                 date, title, ttype, subtype, details, amount = interactive_program(month, year)
                 create_expense(path, date, title, ttype, subtype, details, amount)
     elif args[1] == "-v":
-        print("View mode not implemented yet.")
+        view_option = args[2]
+        if view_option == "1":
+            if args[3] != "-y":
+                print_help(args[0])
+            else:
+                year = int(args[4])
+                month = int(args[6])
+                if month < 1 or month > 12:
+                    print("Month must be between 1 and 12")
+                    return
+                view_expenses_by_month(year, month)
+        elif view_option == "2":
+            if args[3] != "-y":
+                print_help(args[0])
+            else:
+                year = int(args[4])
+                view_expenses_by_year(year)
+        elif view_option == "3":
+            if args[3] != "-y":
+                print_help(args[0])
+            else:
+                year = int(args[4])
+                ttype = args[6]
+                view_expenses_by_type(year, ttype)
+        else:
+            print_help(args[0])
     else:
         print_help(args[0])
     return
