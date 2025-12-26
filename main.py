@@ -1,162 +1,245 @@
 import os
 import sys
 import csv
+import argparse
+from datetime import datetime
+from collections import defaultdict
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional
 
-types = {}
+# --- Configuration & Constants ---
+DATA_DIR = Path("expenses")
+CONFIG_FILE = Path("settings.conf")
+DATE_FMT = "%d-%m-%Y"
 
-def load_conf_file(path="settings.conf"):
-    with open(path) as fp:
-        for line in fp:
-            full = line.split(":")
-            type = full[0]
-            subtypes = full[1].split(",")
-            subtypes[-1] = subtypes[-1].replace("\n","")
-            types[type] = subtypes
+# ANSI Colors for Terminal (works in most modern terminals)
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+
+# --- Visualization Helper ---
+class TerminalUI:
+    @staticmethod
+    def print_header():
+        art = f"""
+{Colors.BLUE}╔════════════════════════════════════════════════════════════╗
+║             {Colors.BOLD}TERMINAL EXPENSE MANAGER v2.0{Colors.ENDC}{Colors.BLUE}                  ║
+╚════════════════════════════════════════════════════════════╝{Colors.ENDC}
+        """
+        print(art)
+
+    @staticmethod
+    def print_bar_chart(data: Dict[str, float], title: str):
+        if not data:
+            print(f"{Colors.WARNING}No data to plot.{Colors.ENDC}")
+            return
+
+        print(f"\n{Colors.BOLD}--- {title} ---{Colors.ENDC}")
+        max_val = max(data.values()) if data.values() else 1
+        max_width = 50  # Character width of the longest bar
+
+        # Sort by value descending
+        sorted_data = sorted(data.items(), key=lambda item: item[1], reverse=True)
+
+        for label, value in sorted_data:
+            bar_len = int((abs(value) / max_val) * max_width)
+            # Choose color based on expense (red) or profit (green)
+            color = Colors.GREEN if value > 0 else Colors.FAIL
+            char = "█" 
             
-def create_expense(path="expenses/01_2016.csv", date="00-00", title="NA", ttype="NA", subtype="NA", details="NA", amount="NA"):
-    try:
-        with open(path, "a", newline="") as fp:
-            spamwriter = csv.writer(fp, delimiter=',')
-            spamwriter.writerow([date, title, ttype, subtype, details, amount])
-    except:
-        raise Exception("File does not exist")
+            bar = f"{color}{char * bar_len}{Colors.ENDC}"
+            print(f"{label:>15} | {bar} {value:.2f}")
+        print("")
 
-def print_help(arg):
-        print(f'''Usage: {arg} OPTIONS -y YEAR -m MONTH
-              Options:
-              -i              Interactive mode to add expenses
-              -v VIEW_OPTION   View expenses
-                VIEW_OPTION:
-                1: View expenses by month
-                2: View expenses by year
-                3: View expenses by type
-              -y YEAR     Specify the year (e.g., 2026)
-              -m MONTH    Specify the month (1-12)''')
+    @staticmethod
+    def print_table(headers: List[str], rows: List[List[str]]):
+        # Calculate column widths
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for i, val in enumerate(row):
+                widths[i] = max(widths[i], len(str(val)))
+        
+        # Add padding
+        widths = [w + 2 for w in widths]
+        
+        # Create format string
+        fmt = "".join([f"{{:<{w}}}" for w in widths])
+        
+        print(Colors.BOLD + fmt.format(*headers) + Colors.ENDC)
+        print("-" * sum(widths))
+        for row in rows:
+            print(fmt.format(*[str(r) for r in row]))
+        print("-" * sum(widths))
 
-def view_expenses_by_month(year, month):
-    path = f"expenses/{month}_{year}.csv"
-    try:
-        with open(path, "r") as fp:
-            spamreader = csv.reader(fp, delimiter=',')
-            total_expenses = 0
-            for row in spamreader:
-                print(', '.join(row))
-                if row[5] != "Amount":
-                    total_expenses += float(row[5])
-            print("Total Expenses: ", total_expenses)
-    except:
-        raise Exception("File does not exist")
+# --- Core Logic ---
+class ExpenseTracker:
+    def __init__(self):
+        self.categories = self._load_config()
+        DATA_DIR.mkdir(exist_ok=True)
 
-def view_expenses_by_year(year):
-    total_expenses = 0
-    for month in range(1, 13):
-        path = f"expenses/{month}_{year}.csv"
+    def _load_config(self) -> Dict[str, List[str]]:
+        cats = {}
+        if not CONFIG_FILE.exists():
+            # Create default if missing
+            default_conf = "Food:Groceries,Dining Out\nTransport:Fuel,Public,Car"
+            with open(CONFIG_FILE, 'w') as f:
+                f.write(default_conf)
+            print(f"{Colors.WARNING}Created default settings.conf{Colors.ENDC}")
+        
+        with open(CONFIG_FILE, 'r') as f:
+            for line in f:
+                if ':' in line:
+                    key, val = line.strip().split(':')
+                    cats[key] = val.split(',')
+        return cats
+
+    def get_file_path(self, year: int, month: int) -> Path:
+        return DATA_DIR / f"{month}_{year}.csv"
+
+    def add_expense(self, year: int, month: int):
+        print(f"{Colors.HEADER}Interactive Mode: {month}/{year}{Colors.ENDC}")
+        
         try:
-            with open(path, "r") as fp:
-                spamreader = csv.reader(fp, delimiter=',')
-                for row in spamreader:
-                    if row[5] != "Amount":
-                        total_expenses += float(row[5])
-        except:
-            continue
-    print("Total Expenses for year ", year, ": ", total_expenses)
+            day = input("Day (DD): ")
+            # Validate date
+            full_date_str = f"{day}-{month}-{year}"
+            datetime.strptime(full_date_str, DATE_FMT) # Raises error if invalid
+            
+            title = input("Title: ")
+            
+            # Category Selection
+            print("\nCategories:")
+            cat_keys = list(self.categories.keys())
+            for i, k in enumerate(cat_keys):
+                print(f"{i}: {k}")
+            cat_idx = int(input("Select Category ID: "))
+            selected_cat = cat_keys[cat_idx]
 
-def view_expenses_by_type(year, ttype):
-    total_expenses = 0
-    for month in range(1, 13):
-        path = f"expenses/{month}_{year}.csv"
-        try:
-            with open(path, "r") as fp:
-                spamreader = csv.reader(fp, delimiter=',')
-                for row in spamreader:
-                    if row[2] == ttype and row[5] != "Amount":
-                        total_expenses += float(row[5])
-        except:
-            continue
-    print(f"Total Expenses for type {ttype} in year {year}: ", total_expenses)
+            # Sub-category Selection
+            print(f"\nSub-types for {selected_cat}:")
+            subs = self.categories[selected_cat]
+            for i, s in enumerate(subs):
+                print(f"{i}: {s}")
+            sub_idx = int(input("Select Sub-type ID: "))
+            selected_sub = subs[sub_idx]
 
-def interactive_program(month, year):
-    months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-    print("Interactive Expense Entry (press Ctrl+C to exit at any time)")
-    print(f"Enter the day of the expense in {months[int(month)-1]} (DD): ")
-    day = input()
-    print("Enter the title of the expense: ")
-    title = input()
-    print("Select the type of expense from the following list: ")
-    for i, t in enumerate(types.keys()):
-        print(f"{i}: {t}")
-    type_index = int(input())
-    ttype = list(types.keys())[type_index]
-    print(f"Select the subtype of {ttype} from the following list: ")
-    for i, st in enumerate(types[ttype]):
-        print(f"{i}: {st}")
-    subtype_index = int(input())
-    subtype = types[ttype][subtype_index]
-    print("Enter additional details (or NA): ")
-    details = input()
-    print("Expense(0) or Profit(1): (Default:0) ")
-    answer = input()
-    sign = -1
-    if answer == "1":
-        sign = 1
-    print("Enter the amount: ")
-    amount = float(input()) * sign
-    date = f"{day}-{month}-{year}"
-    return date, title, ttype, subtype, details, amount
+            details = input("Details (optional): ") or "NA"
+            
+            is_profit = input("Is this Income? (y/N): ").lower() == 'y'
+            amount_str = input("Amount: ")
+            amount = float(amount_str)
+            if not is_profit:
+                amount = -abs(amount) # Expenses are negative internally
+            
+            # Write
+            fpath = self.get_file_path(year, month)
+            file_exists = fpath.exists()
+            
+            with open(fpath, 'a', newline='') as f:
+                writer = csv.writer(f)
+                if not file_exists:
+                    writer.writerow(["Date", "Title", "Type", "Subtype", "Details", "Amount"])
+                writer.writerow([full_date_str, title, selected_cat, selected_sub, details, amount])
+            
+            print(f"{Colors.GREEN}Entry Saved!{Colors.ENDC}")
 
-# ledger -i -y 2026 -m 1
+        except ValueError as e:
+            print(f"{Colors.FAIL}Input Error: {e}{Colors.ENDC}")
+        except IndexError:
+            print(f"{Colors.FAIL}Invalid selection.{Colors.ENDC}")
+        except Exception as e:
+            print(f"{Colors.FAIL}Error: {e}{Colors.ENDC}")
+
+    def load_expenses(self, year: int, month: Optional[int] = None) -> List[dict]:
+        expenses = []
+        months_to_load = [month] if month else range(1, 13)
+        
+        for m in months_to_load:
+            path = self.get_file_path(year, m)
+            if path.exists():
+                with open(path, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        # Clean up formatting
+                        try:
+                            row['Amount'] = float(row['Amount'])
+                            expenses.append(row)
+                        except ValueError:
+                            continue # Skip bad rows
+        return expenses
+
+    def view_report(self, year: int, month: int = None, by_type: str = None):
+        data = self.load_expenses(year, month)
+        if not data:
+            print(f"{Colors.WARNING}No records found for specified date.{Colors.ENDC}")
+            return
+
+        total = sum(d['Amount'] for d in data)
+        
+        # 1. Table View
+        headers = ["Date", "Title", "Type", "Subtype", "Amount"]
+        rows = [[d['Date'], d['Title'], d['Type'], d['Subtype'], f"{d['Amount']:.2f}"] 
+                for d in data if (not by_type or d['Type'] == by_type)]
+        
+        TerminalUI.print_table(headers, rows)
+        
+        # 2. Aggregation for Plotting
+        type_totals = defaultdict(float)
+        for d in data:
+            # If filtering by type, plot subtypes. If global, plot main types
+            key = d['Subtype'] if by_type else d['Type']
+            if by_type and d['Type'] != by_type:
+                continue
+            type_totals[key] += d['Amount']
+
+        # 3. Plot
+        plot_title = f"Expenses by {'Subtype' if by_type else 'Type'}"
+        TerminalUI.print_bar_chart(type_totals, plot_title)
+
+        print(f"\n{Colors.BOLD}Total Net: {total:.2f}{Colors.ENDC}")
+
+
+# --- Main Execution ---
 def main():
-    args = sys.argv
-    if args[1] == "-i":
-        if args[2] != "-y":
-            print_help(args[0])
-        else:
-            year = int(args[3])
-            month = int(args[5])
-            if month < 1 or month > 12:
-                print("Month must be between 1 and 12")
-                return
-            path = f"expenses/{month}_{year}.csv"
-            if not os.path.exists("expenses"):
-                os.mkdir("expenses")
-            if not os.path.exists(path):
-                with open(path, "w", newline="") as fp:
-                    spamwriter = csv.writer(fp, delimiter=',')
-                    spamwriter.writerow(["Date", "Title", "Type", "Subtype", "Details", "Amount"])
+    TerminalUI.print_header()
+    tracker = ExpenseTracker()
+
+    # Professional Argument Parsing
+    parser = argparse.ArgumentParser(description="CLI Expense Manager")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Command: Add
+    add_parser = subparsers.add_parser("add", help="Add a new expense")
+    add_parser.add_argument("-y", "--year", type=int, default=datetime.now().year)
+    add_parser.add_argument("-m", "--month", type=int, default=datetime.now().month)
+
+    # Command: View
+    view_parser = subparsers.add_parser("view", help="View expenses and charts")
+    view_parser.add_argument("-y", "--year", type=int, required=True, help="Year to view")
+    view_parser.add_argument("-m", "--month", type=int, help="Specific month (1-12)")
+    view_parser.add_argument("-t", "--type", type=str, help="Filter by specific Type (e.g. Food)")
+
+    args = parser.parse_args()
+
+    if args.command == "add":
+        try:
             while True:
-                date, title, ttype, subtype, details, amount = interactive_program(month, year)
-                create_expense(path, date, title, ttype, subtype, details, amount)
-    elif args[1] == "-v":
-        view_option = args[2]
-        if view_option == "1":
-            if args[3] != "-y":
-                print_help(args[0])
-            else:
-                year = int(args[4])
-                month = int(args[6])
-                if month < 1 or month > 12:
-                    print("Month must be between 1 and 12")
-                    return
-                view_expenses_by_month(year, month)
-        elif view_option == "2":
-            if args[3] != "-y":
-                print_help(args[0])
-            else:
-                year = int(args[4])
-                view_expenses_by_year(year)
-        elif view_option == "3":
-            if args[3] != "-y":
-                print_help(args[0])
-            else:
-                year = int(args[4])
-                ttype = args[6]
-                view_expenses_by_type(year, ttype)
-        else:
-            print_help(args[0])
+                tracker.add_expense(args.year, args.month)
+                if input("Add another? (Y/n): ").lower() == 'n':
+                    break
+        except KeyboardInterrupt:
+            print("\nExiting...")
+
+    elif args.command == "view":
+        tracker.view_report(args.year, args.month, args.type)
+    
     else:
-        print_help(args[0])
-    return
+        parser.print_help()
 
 if __name__ == "__main__":
-    load_conf_file()
     main()
